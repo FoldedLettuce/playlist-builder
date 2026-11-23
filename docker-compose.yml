@@ -2,7 +2,7 @@
 # Needs next to it:  .env (copy .env.example)  and  service-account.json (Google service account key)
 services:
   playlist-builder:
-    image: ghcr.io/YOUR_GITHUB_USER/playlist-builder:latest   # <- put your GitHub username (lowercase)
+    image: ghcr.io/foldedlettuce/playlist-builder:latest
     container_name: playlist-builder
     restart: unless-stopped
     env_file: .env

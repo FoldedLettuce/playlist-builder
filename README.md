@@ -31,23 +31,22 @@ The image is built by GitHub Actions on every push to `main` and published to Gi
 Watchtower then pulls it.
 
 **One time, on GitHub**
-1. Push this repo to a **private** GitHub repo named `playlist-builder`.
-2. Watch the first run under the Actions tab. When it's green, the image exists at `ghcr.io/<you>/playlist-builder:latest`.
-3. Make a classic personal access token with only the `read:packages` scope (for vm1 to pull a private image).
+1. The repo is https://github.com/FoldedLettuce/playlist-builder (public).
+2. Watch the first run under the Actions tab. When it's green, the image exists at `ghcr.io/foldedlettuce/playlist-builder:latest`.
+3. A new package is private by default, even in a public repo. Go to your GitHub profile, Packages, `playlist-builder`, Package settings, Change visibility, Public. Then vm1 and Watchtower need no login at all.
 
 **One time, on vm1-public-apps**
 1. `mkdir -p ~/stacks/playlist-builder && cd ~/stacks/playlist-builder`
 2. Copy `docker-compose.yml` and `.env.example` (as `.env`) here, put the Google key next to them as `service-account.json`, and fill in `.env`.
-3. In `docker-compose.yml` replace `YOUR_GITHUB_USER` with your lowercase GitHub username.
-4. `echo <the token> | docker login ghcr.io -u <you> --password-stdin`
-5. `docker compose up -d` then check `docker compose ps` shows it `healthy`.
-6. In Pangolin add a resource pointing at `<vm1 ip>:3040`. The app has its own staff login, so decide if you also want Pangolin auth in front.
-7. Optional: add an Uptime Kuma HTTP monitor on `/healthz` (it needs no login).
+3. The compose file already points at `ghcr.io/foldedlettuce/playlist-builder:latest`.
+4. `docker compose up -d` then check `docker compose ps` shows it `healthy`.
+5. In Pangolin add a resource pointing at `<vm1 ip>:3040`. The app has its own staff login, so decide if you also want Pangolin auth in front.
+6. Optional: add an Uptime Kuma HTTP monitor on `/healthz` (it needs no login).
 
 **Auto-update with Watchtower**
 - The compose file already carries the `com.centurylinklabs.watchtower.enable=true` label. If your Watchtower isn't in label-only mode it's harmless.
-- Because the image is private, Watchtower needs the same registry login: mount `~/.docker/config.json` into it as `/config.json` (`-v /home/<you>/.docker/config.json:/config.json`). It has to be the plain file with base64 `auths`, a credential helper won't work.
-- Alternative: make the package public in GitHub (Package settings) and skip the token entirely. Nothing secret is in the image, but it does contain the sample data and the theatre's IPs.
+- With a public package Watchtower needs no registry login. Nothing secret is in the image, but it does contain the sample data and the theatre's IPs.
+- If you ever keep the package private, make a classic token with only `read:packages`, run `docker login ghcr.io` on vm1, and mount `~/.docker/config.json` into Watchtower as `/config.json`. It has to be the plain file with base64 `auths`, a credential helper won't work.
 - To deploy immediately instead of waiting for the daily run: `docker compose pull && docker compose up -d`.
 
 **Backups (do this, history is forever)**
