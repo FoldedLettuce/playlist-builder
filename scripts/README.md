@@ -14,7 +14,7 @@
 All of this happens in the folder that has your current `trailer_automation.py`.
 
 1. Download `launcher.py` and `make_env.py` from this folder into that folder.
-2. `python make_env.py` makes `.env` from your current script. Open it and check the values are there.
+2. `python make_env.py` adds any private settings still written inside your current script to `.env`. It never changes a value that is already filled in. Run `python make_env.py --show` to see which settings are filled (names only).
 3. Add the keep rule settings to `.env`: `PLAYLIST_APP_URL=https://your-app-address` and `PLAYLIST_APP_TOKEN=` the same text as `API_TOKEN` in the app's `.env` on vm1.
 4. `python launcher.py --check` should say everything is ready.
 5. `python launcher.py --dry-run` shows what it would do.
