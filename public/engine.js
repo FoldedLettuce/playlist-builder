@@ -241,6 +241,7 @@
           cpl,
           runtime,
           onlyFor: r.only_for_title ? String(r.only_for_title) : null,
+          exceptFor: String(r.except_titles || '').split(/[,|]/).map((x) => x.trim()).filter(Boolean),
           notes: r.notes || '',
           order,
         })
@@ -267,7 +268,8 @@
         (!a.end || a.end >= date) &&
         (a.format === 'ANY' || a.format === wantFmt) &&
         (!a.ratings || a.ratings.includes(rating)) &&
-        (!a.onlyFor || sameTitle(a.onlyFor, title))
+        (!a.onlyFor || sameTitle(a.onlyFor, title)) &&
+        !a.exceptFor.some((x) => sameTitle(x, title))
     )
     if (!c.length) return { ad: null, ambiguous: [] }
     const key = (a) => [a.onlyFor ? 1 : 0, a.format === wantFmt ? 1 : 0, a.ratings ? 1 : 0, a.start || '']

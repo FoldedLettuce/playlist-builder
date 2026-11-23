@@ -34,3 +34,20 @@ All of this happens in the folder that has your current `trailer_automation.py`.
 - `--check` tests every connection
 - `--dry-run` shows the plan and sends nothing
 - `--dump-installed` reads both projectors fresh into `installed_dump.csv` (names, run lengths, FFEC)
+
+## The Playlist Data tab (what the playlist builder app reads)
+
+Every run the script rebuilds the `Playlist Data` tab from what is on the projectors. Nobody types in it.
+
+One time setup after this version:
+1. Open the sheet, Extensions, Apps Script, and paste the newest `TrailerManager.gs` over the old one. Keep your own `WEB_SECRET` line.
+2. Deploy, Manage deployments, pencil icon, Version: New version, Deploy.
+3. On the theatre PC run `python launcher.py --check`. The new `Printout block` line should list your Coke flight and special ad rows.
+4. `python launcher.py --dry-run` writes `playlist_data_preview.csv` next to the script. Open it and look it over before the first real push.
+
+Things you type on the Printout under the EXCLUDE line:
+- `2026 Coke Flight 11` in column A and the dates in column B (`10/30 - 12/3`). Already how you do it.
+- `GPG TITLES: Title One, Title Two` in column A whenever a GPG Coke flight is on the servers. Only you know which animated titles it is for.
+- The Special Advertisements table as before. Chevy dates are read from it unless a campaign email already gave them.
+
+Alerts land in the main Discord channel under "Playlist Data tab". Rows the script cannot date or time safely are left out of the tab until the alert is fixed.

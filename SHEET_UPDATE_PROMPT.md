@@ -12,7 +12,7 @@ Keep my usual rules: all config and credentials in one block at the top of the s
 
 One header row, then one row per CPL. Fully rewrite the tab each run (idempotent). Header names exactly, in this order:
 
-`role, format, title, version, rating, release_date, start_date, end_date, cpl_name, runtime_sec, ffec_sec, only_for_title, notes`
+`role, format, title, version, rating, release_date, start_date, end_date, cpl_name, runtime_sec, ffec_sec, only_for_title, notes, except_titles`
 
 | column | meaning |
 |---|---|
@@ -28,6 +28,7 @@ One header row, then one row per CPL. Fully rewrite the tab each run (idempotent
 | ffec_sec | features only. Offset of the `FFEC` marker into the feature in seconds, from the CPL's marker list. Blank if the CPL has none |
 | only_for_title | optional. Makes an ad apply to one film only (feature-specific SV ads, targeted Coke ads) |
 | notes | free text, e.g. why a row is special |
+| except_titles | optional comma list of films this ad must NOT play on (Geico skips Josephine). Added 2026-11-23, always the last column |
 
 Write the whole sheet cells as plain text/number, not auto-typed. (Excel already turned the Film Name of "November 1963" into the date 11/1/1963 in Currently Downloaded, so format the title columns as plain text and fix that cell.)
 
@@ -65,3 +66,19 @@ Do not search for the Ceilio emails and do not download from them anymore. Alway
 
 Status 2026-11-23: done in `trailer_automation.py`. The Cielo "HBR Campaign" emails are ignored. Weekly SV ads still come from Cielo. The Cinema Productions information email now gives the brand, dates, spot length, who it skips (for example "ALL FEATURES EXCEPT JOSEPHINE") and the Flat and Scope Dropbox links. Dropbox links are forced to `dl=1`. To feed an email by hand, save it as a `.eml` in the `email_drop` folder next to the script. It is read on the next run and moved into `email_drop/done`. Per-title exclusions are not in the `Playlist Data` contract yet, so the app cannot skip a film for a marquee ad until that is added.
 
+
+## Status 2026-11-23: the Playlist Data writer is built
+`trailer_automation.py` now writes the tab. It reads run lengths and FFEC from both projectors (Projector 1 wins, a difference between the two raises an alert) and rewrites the whole tab as plain text every run.
+
+How each role is decided:
+- FEATURE: every `*_FTR*` package. Framing from the `_S_`, `_F_` or `_F-200_` token, rating from the `US-PG13` style token else TMDB, title and release date from TMDB.
+- TRAILER: whatever the trailer logic keeps installed (deleted ones are left out, held-back ones stay with a note), two rows each.
+- SV_EARLY and SV_LATE: from the package name. A special one such as `Fb-SV Godzilla Zero late-R 20261123` gets `only_for_title`. If the feature is not installed yet the row still goes in and says so in notes.
+- COKE: dates from the Printout line `2026 Coke Flight 11 | 10/30 - 12/3`. GEN rows are rating `ALL`. A GPG flight needs a Printout line `GPG TITLES: Title One, Title Two` (typed by hand) and then gets one row per title with rating `G,PG`. Without that line the GPG flight is left out and an alert says so.
+- CHEVY: dates from a Cinema Productions campaign email when it carries the asset ids, else from the Printout Special Advertisements table. When both exist and disagree the email wins and an alert says so. No dates anywhere means the row is left out and an alert says so.
+- MARQUEE: the campaign is found through the download record (same CPL id) else through the brand name. Dates, ratings and `except_titles` come from the campaign email (or the Printout row).
+- PRESHOW and RATING_CARD: straight from the package names.
+
+Alerts go to the main Discord channel once each, under "Playlist Data tab": missing run length, feature without rating or FFEC, two ads active at once, next week's SV pairs missing (from 4 days before the new Monday), plus the left-out rows above.
+
+Needs a one time paste of the newest `scripts/TrailerManager.gs` into the sheet's Apps Script (new `printout` read action and a `plain` text option), then Deploy, Manage deployments, New version.

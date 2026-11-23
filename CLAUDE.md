@@ -31,28 +31,28 @@ Real data needs `DATA_SOURCE=sheet`, `SHEET_ID`, and a `service-account.json`. S
 | `tools/make_sample.py` | Regenerates the sample from the real `Current_Trailers.xlsx` |
 | `test/` | `engine.test.js` (rules, with a small hand-checkable synthetic dataset) and `server.test.js` (spawns the real server) |
 | `SHEET_UPDATE_PROMPT.md` | Spec and prompt for the session that owns `trailer_automation.py` and the sheet |
-| `scripts/` | `trailer_automation.py` (runs on the theatre PC), `launcher.py` (Task Scheduler runs this, it self-updates the script from `main`), `make_env.py`, `TrailerManager.gs` (Apps Script, pasted into the sheet by hand), Python tests. NEVER put secrets in here, they live in `.env` on the PC. Anything merged to `main` that changes `trailer_automation.py` reaches the theatre PC within 15 minutes |
+| `scripts/` | `trailer_automation.py` (runs on the theatre PC, builds the `Playlist Data` tab), `launcher.py` (Task Scheduler runs this, it self-updates the script from `main`), `make_env.py`, `TrailerManager.gs` (Apps Script, pasted into the sheet by hand, so a change there needs Liam to paste and redeploy), Python tests (`test_*.py`) with a trimmed real dump in `fixtures/`. NEVER put secrets in here, they live in `.env` on the PC. Anything merged to `main` that changes `trailer_automation.py` reaches the theatre PC within 15 minutes |
 | `ROADMAP.md` | Roadmap. The admin page shows this file |
 
 ## Data contract
 
 The app reads ONE tab, `Playlist Data`, one row per CPL. Columns:
-`role, format, title, version, rating, release_date, start_date, end_date, cpl_name, runtime_sec, ffec_sec, only_for_title, notes`.
-Roles: `FEATURE`, `TRAILER`, `SV_EARLY`, `SV_LATE`, `COKE`, `CHEVY`, `MARQUEE`, `PRESHOW`, `RATING_CARD`. Full meaning is in `SHEET_UPDATE_PROMPT.md`. `loadData()` in the engine parses it and is forgiving about date formats (`YYYY-MM-DD` or `M/D/YYYY`) and durations (seconds or `H:MM:SS`).
+`role, format, title, version, rating, release_date, start_date, end_date, cpl_name, runtime_sec, ffec_sec, only_for_title, notes, except_titles`.
+Roles: `FEATURE`, `TRAILER`, `SV_EARLY`, `SV_LATE`, `COKE`, `CHEVY`, `MARQUEE`, `PRESHOW`, `RATING_CARD`. Full meaning is in `SHEET_UPDATE_PROMPT.md`. `except_titles` is optional and is a comma list of films the ad must NOT play on (Geico skips Josephine). `trailer_automation.py` on the theatre PC writes this whole tab every run as plain text, nobody types in it. `loadData()` in the engine parses it and is forgiving about date formats (`YYYY-MM-DD` or `M/D/YYYY`) and durations (seconds or `H:MM:SS`).
 
 ## Business rules (encoded in engine.js, locked in by tests)
 
-- The feature starts exactly 10:00 after the posted showtime. Playlist start = showtime + 10:00 - preshow length. Start times are whole seconds because GDC only takes whole seconds, so up to 0.5s of error is accepted and shown.
+- The feature starts exactly 10:00 after the posted showtime. Playlist start = showtime + 10:00 - preshow length. Everything before the feature counts as preshow, including the Black 1min and every ad (a 2 minute marquee spot eats into the 25 to 30 minute target like anything else). Start times are whole seconds because GDC only takes whole seconds, so up to 0.5s of error is accepted and shown.
 - Every Projector Flat / Scope / F-200 cue pauses the playlist 10 seconds. The pause is counted in the preshow length. A Flat film has one, an F-200 film has two.
 - Playlist order is always: Black 1min, SV early, SV late, Coke, Chevy, trailers, marquee, DeSimone PreShow, rating card, feature, Black 5sec. Cues: Show Start - Scope, Coke, Trailers, Feature, Credits (at the FFEC marker), Show End. Always Show Start - Scope, never the Flat one.
 - Trailers: same rating first, lower-rated only if there are not enough, never above, never unrated, never the film's own. Pick the soonest-releasing N (release on or after the playlist's first day) then play them furthest-out first. N is auto (4 to 5) so the preshow lands in 25 to 30 minutes. If there are not enough upcoming ones, fall back to already-released and warn.
 - Playlist names are `SVW## Title`. SV weeks run Monday to Sunday. Week 1 is the first Monday of the calendar year, so Mon 2026-11-23 is SVW47. A playlist splits at every SV week boundary and whenever an ad changes mid-week (second period is `.5`, then `.6`). A film that opens after a mid-week switch is still the `.5` playlist.
-- Ads are picked by role, date window, rating, and format. A row with `only_for_title` beats the regular row (this is how a feature-specific SV late ad like the Godzilla one works). Two equally good matches raise an "ambiguous" warning.
+- Ads are picked by role, date window, rating, and format. A row with `only_for_title` beats the regular row (this is how a feature-specific SV late ad like the Godzilla one works). A row whose `except_titles` lists the film is skipped for that film only. Two equally good matches raise an "ambiguous" warning.
 - Theatre assignment: default screens are #1 for 3:30 and 6:30, #2 for 4:00 and 7:00. If the turnaround before a preshow is under 15 minutes, try the swapped layout. If neither reaches 15, take the better one when it is at least 5 minutes and warn. Under 5 is an error that needs a manual call.
 - Default run is the upcoming Friday (strictly after today) through the following Thursday, unless the film has a later open date in the sheet. `defaultDates()` in the engine.
 - A film can run at most 7 days (new bookings are not known further out). A week can still have one film through Tuesday and a new one opening Wednesday.
 - Trailer cleanup rule (for the trailer script and the future trailer UI): never delete or replace a trailer that is in a playlist currently running or scheduled, even if it is old or superseded by a newer version. Retire it only after its last playing day. Reason: swapping mid-week means recalculating times and editing playlists for no benefit. A held-over film is handled by making a Fri-Sun playlist and editing the Mon-Thu one.
-- Missing runtimes or missing SV ads are loud errors. Never silently produce times from partial data.
+- Missing runtimes or missing SV ads are loud errors. Never silently produce times from partial data. The script follows the same idea when it writes the tab: a row it cannot date or time safely is left out and Discord gets an alert, it never guesses.
 
 Do not change these numbers or rules without Liam saying so. If a rule changes, change the engine AND the test AND this section in the same commit.
 

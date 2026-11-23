@@ -128,6 +128,8 @@ function doPost(e) {
       out = { ok: true, rules: getRules_(req.seed || []) };
     } else if (req.action === 'push') {
       out = pushData_(req);
+    } else if (req.action === 'printout') {
+      out = { ok: true, lines: readPrintoutBlock_() };
     } else {
       out = { ok: false, error: 'unknown action' };
     }
@@ -193,6 +195,27 @@ function getRules_(seed) {
 }
 
 // ---------------------------------------------
+// Reading the hand-typed block on the Printout (read only, used for the Playlist Data tab)
+// ---------------------------------------------
+/** Returns every row under the "EXCLUDE EVERYTHING BELOW THIS LINE" marker as plain display text, 4 columns wide.
+ *  The script reads the Coke flight line, the GPG titles line and the Special Advertisements table from it. Nothing is written. */
+function readPrintoutBlock_() {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PRINTOUT_SHEET);
+  if (!sh) return [];
+  const last = sh.getLastRow();
+  if (last < 1) return [];
+  const vals = sh.getRange(1, 1, last, 4).getDisplayValues();
+  let marker = -1;
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim().indexOf(PRINTOUT_MARKER_TEXT) === 0) { marker = i; break; }
+  }
+  if (marker < 0) return [];
+  const out = vals.slice(marker + 1, marker + 81);
+  while (out.length && out[out.length - 1].every(function (c) { return String(c).trim() === ''; })) out.pop();
+  return out;
+}
+
+// ---------------------------------------------
 // Writing the tabs
 // ---------------------------------------------
 function ensureSize_(sh, rows, cols) {
@@ -228,10 +251,11 @@ function writeReplaceTab_(ss, tab) {
   const grid = rows.map(function (r) { const c = r.slice(); while (c.length < width) c.push(''); return c; });
   ensureSize_(sh, grid.length, width);
   // Text cells are written as plain text so Sheets cannot turn a name like NOVEMBER1963 into a date.
-  // Real dates (2026-11-16) and numbers are left alone.
+  // Real dates (2026-11-16) and numbers are left alone, unless the tab asks for plain: true (the Playlist Data tab does),
+  // then every cell stays exactly the text the script sent.
   const fmts = grid.map(function (r) {
     return r.map(function (v) {
-      return (typeof v === 'string' && v !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(v)) ? '@' : 'General';
+      return (typeof v === 'string' && v !== '' && (tab.plain || !/^\d{4}-\d{2}-\d{2}$/.test(v))) ? '@' : 'General';
     });
   });
   const rng = sh.getRange(1, 1, grid.length, width);

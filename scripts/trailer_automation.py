@@ -10,7 +10,7 @@ What it does, every POLL_MINUTES (default 15):
   2. Scans both projectors over FTP (read-only) -> what is INSTALLED, with full untruncated names
   3. Applies your rules (English audio / 5.1 / CCAP preferred, release date, 28-day rule, newer version, remove list)
   4. Pushes the result to your Google Sheet (Available, Currently Downloaded, Download, Delete, Needs Review,
-     Auto-Ignored, Special Ads, Status) and rebuilds the Printout
+     Auto-Ignored, Special Ads, Status, Playlist Data) and rebuilds the Printout
   5. Downloads weekly ad ZIPs (Cielo) and special ad ZIPs (Dropbox links in the information email) into ADS_TARGET_ROOT and tidies old ones
   6. Discord: the MAIN webhook only gets things that need you and MAJOR errors. The LOG webhook (mute it) gets minor
      errors, finished ad downloads and a healthcheck. Uptime Kuma gets a heartbeat every cycle (down on a major problem).
@@ -81,6 +81,11 @@ TMDB_TOKEN = ""                      # <- put the real value in .env (never comm
 # or a newer version exists. It is held back until the playlist's last day. Leave blank = no protection (a warning is logged).
 PLAYLIST_APP_URL = ""              # <- https://your-app-address  (no trailing slash)
 PLAYLIST_APP_TOKEN = ""            # <- same text as API_TOKEN in the app's .env
+
+# --- The Playlist Data tab (the one tab the playlist builder app reads, rebuilt every run) ---
+PLAYLIST_DATA_ENABLED = True
+PLAYLIST_DATA_TAB = "Playlist Data"    # must match TAB_NAME in the app (its default is the same)
+SV_PAIR_ALERT_DAYS = 4             # alert when next week's SV ads are not on the servers and the new week starts within this many days
 
 # --- Discord (paste webhook URLs - blank = off) ---
 DISCORD_WEBHOOK = ""               # MAIN channel. Only things that need you: downloads, deletes, review, special ads, MAJOR errors
@@ -854,7 +859,7 @@ def parse_campaign(subj, text, received=None, html=""):
     """Cinema Productions special ad information email -> everything the script needs, or None if it has no asset ids.
     Keys: ids, code, name, ratings, exclude (list of film titles to skip), start, end (ISO or ''), length (seconds or 0),
     placement, flat_url, scope_url."""
-    ids = sorted(set(re.findall(r"MAR\.[A-Z0-9]+\.\d{3,4}\.\d+", text)))
+    ids = sorted(set(re.findall(r"(?:MAR|TRL)\.[A-Z0-9]+\.\d{3,4}\.\d+", text)))
     if not ids:
         return None
     flat = " ".join((text or "").split())
@@ -1515,10 +1520,14 @@ def build_plan(S, rules, inst_by_host):
     inst = {}
     for label, items in inst_by_host.items():
         for it in items:
-            d = inst.setdefault(it["name"], {"hosts": set(), "kind": it["kind"], "cpls": set()})
+            d = inst.setdefault(it["name"], {"hosts": set(), "kind": it["kind"], "cpls": set(), "dur": {}, "ffec": {}})
             d["hosts"].add(label)
             if it.get("cpl"):
                 d["cpls"].add(it["cpl"])
+            if it.get("dur") is not None:
+                d["dur"][label] = it["dur"]
+            if it.get("ffec") is not None:
+                d["ffec"][label] = it["ffec"]
     managed = {}
     auto_ignored = {}               # SLUG -> (example name, reason)
     for name, d in inst.items():
@@ -1842,9 +1851,379 @@ def special_rows(S):
 
 
 # ===================================================================================================
+#  PLAYLIST DATA TAB (the one tab the playlist builder app reads)
+#  Rebuilt from scratch every run, plain text cells, one row per CPL. Rows that cannot be written
+#  safely (no dates, no run length for a Chevy, and so on) are left out and an alert says why.
+# ===================================================================================================
+PD_HEADER = ["role", "format", "title", "version", "rating", "release_date", "start_date", "end_date", "cpl_name",
+             "runtime_sec", "ffec_sec", "only_for_title", "notes", "except_titles"]
+PD_ROLE_ORDER = ["FEATURE", "TRAILER", "SV_EARLY", "SV_LATE", "COKE", "CHEVY", "MARQUEE", "PRESHOW", "RATING_CARD"]
+SPECIAL_HEADER_ROW = "Special Advertisements"     # header of the hand-typed table on the Printout, same text as in TrailerManager.gs
+PD_RATINGS = ["G", "PG", "PG-13", "R"]
+_PD_RATING_TOKENS = {"G": "G", "PG": "PG", "PG13": "PG-13", "PG-13": "PG-13", "R": "R"}
+
+_PD_FEATURE_RE = re.compile(r"^(?P<slug>[^_]+)_FTR(?:-[^_]*)?_", re.I)
+_PD_SV_RE = re.compile(r"^Fb-SV\s+(?:(?P<title>.+?)\s+)?(?P<pos>early|late)-(?P<rating>G|PG13|PG|R)\s+(?P<ymd>\d{8})$", re.I)
+_PD_COKE_RE = re.compile(r"^KO\d+-FLT(?P<flight>\d+)-(?P<kind>GEN|GPG)_ADV_(?P<fmt>[SF])_", re.I)
+_PD_CHEVY_RE = re.compile(r"^TRL\.[A-Z]{3}\.\d{4}\.(?P<num>\d+)_.*_(?P<fmt>flat|scope)$", re.I)
+_PD_PRESHOW_RE = re.compile(r"^DeSimone_PreShow_\d{4}_(?P<fmt>flat|scope)_dcp$", re.I)
+_PD_CARD_RE = re.compile(r"^(?P<rating>G|PG|PG-13|R)_RTG_(?P<fmt>[FS])_", re.I)
+_PD_RANGE_RE = re.compile(r"(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\s*(?:-|–|—|to|through|thru)\s*(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?", re.I)
+
+
+def _norm_title(s):
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def _same_title(a, b):
+    """Same rule the app's engine uses to decide that two film titles are the same film."""
+    x, y = _norm_title(a), _norm_title(b)
+    if not x or not y:
+        return False
+    return x == y or (min(len(x), len(y)) >= 6 and (x.startswith(y) or y.startswith(x)))
+
+
+def _sec(v):
+    return "" if v is None else "%.3f" % v
+
+
+def _pd_rating(text):
+    return _PD_RATING_TOKENS.get(re.sub(r"\s+", "", (text or "").upper()), "")
+
+
+def _pd_row(role, fmt="", title="", version="", rating="", release="", start="", end="", cpl="", runtime=None,
+            ffec=None, only="", notes="", exc=""):
+    return {"role": role, "format": fmt, "title": title, "version": version, "rating": rating, "release_date": release,
+            "start_date": start, "end_date": end, "cpl_name": cpl, "runtime_sec": _sec(runtime), "ffec_sec": _sec(ffec),
+            "only_for_title": only, "notes": notes, "except_titles": exc}
+
+
+def parse_month_day_range(text, t, year=None):
+    """'10/30 - 12/3' -> ('2026-10-30', '2026-12-03'). The year comes from the text, then from year, then it is the one
+    that puts the start nearest to today. An end before the start rolls into the next year. None if there is no range."""
+    m = _PD_RANGE_RE.search(text or "")
+    if not m:
+        return None
+    m1, d1, y1, m2, d2, y2 = int(m.group(1)), int(m.group(2)), m.group(3), int(m.group(4)), int(m.group(5)), m.group(6)
+
+    def full(y):
+        y = int(y)
+        return y + 2000 if y < 100 else y
+
+    try:
+        if y1:
+            ys = full(y1)
+        elif year:
+            ys = year
+        else:
+            ys = min((t.year - 1, t.year, t.year + 1), key=lambda y: abs((date(y, m1, d1) - t).days))
+        start = date(ys, m1, d1)
+        end = date(full(y2) if y2 else ys, m2, d2)
+        if end < start and not y2:
+            end = date(ys + 1, m2, d2)
+    except ValueError:
+        return None
+    return start.isoformat(), end.isoformat()
+
+
+def parse_printout(lines, t):
+    """The hand-typed block under the EXCLUDE line of the Printout (rows of up to 4 cells) ->
+    {'coke': {flight: (start, end)}, 'gpg_titles': [...], 'specials': [{brand, nums, start, end, position, ratings}]}"""
+    out = {"coke": {}, "gpg_titles": [], "specials": []}
+    rows = [[str(c).strip() for c in (r or [])] for r in (lines or [])]
+    in_specials = False
+    for cells in rows:
+        txt = " | ".join(c for c in cells if c)
+        if not txt:
+            in_specials = False
+            continue
+        mc = re.search(r"Coke\s+Flight\s+(\d+)", txt, re.I)
+        if mc:
+            ym = re.search(r"\b(20\d\d)\b", txt)
+            rng = parse_month_day_range(txt, t, int(ym.group(1)) if ym else None)
+            if rng:
+                out["coke"][int(mc.group(1))] = rng
+            continue
+        mg = re.match(r"GPG\s+TITLES?\s*[:\-]\s*(.+)$", txt, re.I)
+        if mg:
+            out["gpg_titles"] = [x.strip() for x in re.split(r"\s*(?:,|&|\||\band\b)\s*", mg.group(1)) if x.strip()]
+            continue
+        if cells and cells[0].lower() == SPECIAL_HEADER_ROW.lower():
+            in_specials = True
+            continue
+        if in_specials:
+            rng = parse_month_day_range(cells[1] if len(cells) > 1 else "", t)
+            nums = re.findall(r"\.(\d{2,4})\b", cells[0])
+            if rng and nums:
+                out["specials"].append({"brand": cells[0].split("(")[0].strip(), "nums": set(nums), "start": rng[0],
+                                        "end": rng[1], "position": (cells[2] if len(cells) > 2 else "").lower(),
+                                        "ratings": cells[3] if len(cells) > 3 else "", "exclude": [], "src": "printout"})
+    return out
+
+
+def _ratings_list(text):
+    """'G,PG,PG-13' -> ['G','PG','PG-13'].  'All' or '' -> None (None means every rating)."""
+    txt = (text or "").strip()
+    if not txt or re.match(r"all", txt, re.I):
+        return None
+    found = [_pd_rating(x) for x in re.split(r"[,\s&]+", txt) if _pd_rating(x)]
+    return found or None
+
+
+def special_windows(S, printout, alerts):
+    """Every special ad window we know about: first the information emails (S['specials']), then the hand-typed Printout
+    rows. Where both describe the same asset numbers the email wins and a disagreement on dates raises an alert."""
+    wins = []
+    for key, c in S.get("specials", {}).items():
+        code = c.get("brand", "")
+        brand = KNOWN_BRAND_NAMES.get(code) or S.get("brands", {}).get(code) or code
+        rat_text = next((S["campaign_ratings"][i] for i in c["ids"] if i in S.get("campaign_ratings", {})), SPECIAL_AD_DEFAULT_RATINGS)
+        wins.append({"brand": brand, "nums": {i.split(".")[-1] for i in c["ids"]}, "start": c.get("start", ""),
+                     "end": c.get("end", ""), "position": (c.get("placement") or "").lower(),
+                     "ratings": rat_text, "exclude": list(c.get("exclude") or []), "src": "email",
+                     "received": c.get("received", "")})
+    for pr in (printout or {}).get("specials", []):
+        same = next((w for w in wins if w["nums"] & pr["nums"]), None)
+        if same is None:
+            wins.append(dict(pr, received=""))
+        elif (same["start"], same["end"]) != (pr["start"], pr["end"]):
+            alerts.append("Playlist Data: the Printout says %s (.%s) runs %s to %s but the email says %s to %s. Using the email dates" % (
+                pr["brand"], "/".join(sorted(pr["nums"])), pr["start"], pr["end"], same["start"], same["end"]))
+    return wins
+
+
+def _window_for_num(wins, num):
+    c = [w for w in wins if num in w["nums"] and w["start"] and w["end"]]
+    return max(c, key=lambda w: w["end"]) if c else None
+
+
+def _window_for_marquee(S, name, d, wins):
+    """Which campaign does an installed marquee package belong to? 1) the download record that holds the same CPL id,
+    2) the one campaign by the same brand. Returns (window or None, note)."""
+    have = {c.lower() for c in d.get("cpls", [])}
+    for a in S.get("ads", {}).values():
+        if a.get("kind") != "hbr":
+            continue
+        ids = {(c.get("id") or "").lower() for c in a.get("cpls", [])}
+        titles = {c.get("title") for c in a.get("cpls", [])}
+        if (ids & have) or name in titles:
+            m = [w for w in wins if w["end"] == a.get("end", "") and (not w.get("received") or w["received"] == a.get("date", ""))
+                 and w["position"].find("trailer") < 0]
+            if m:
+                return m[0], ""
+            if a.get("end"):
+                return {"brand": "", "nums": set(), "start": "", "end": a["end"], "position": "marquee",
+                        "ratings": SPECIAL_AD_DEFAULT_RATINGS, "exclude": [], "src": "download"}, "dates from the download record only"
+    flat = _norm_title(name)
+    cand = [w for w in wins if "trailer" not in w["position"] and w["start"] and w["end"] and _norm_title(w["brand"]) and _norm_title(w["brand"]) in flat]
+    if cand:
+        return max(cand, key=lambda w: w["end"]), "dates matched by brand name"
+    return None, ""
+
+
+def playlist_data(S, plan, printout, lookup, t=None, printout_ok=True):
+    """Builds the Playlist Data tab. Returns (rows as lists in PD_HEADER order, alerts).
+    lookup(slug, hint) is the TMDB lookup (title, release date, rating) used for features."""
+    t = t or today()
+    alerts = []
+    rows = []
+    inst = plan["inst"]
+    labels = [l for l, _ in FTP_PROJECTORS]
+    wins = special_windows(S, printout, alerts)
+
+    def runtime_of(name, key="dur"):
+        vals = [(l, inst[name].get(key, {}).get(l)) for l in labels if inst[name].get(key, {}).get(l) is not None]
+        if not vals:
+            return None
+        if len(vals) > 1 and max(v for _, v in vals) - min(v for _, v in vals) > 0.002:
+            alerts.append("Playlist Data: %s differs between the projectors for %s (%s). Using %s" % (
+                "run length" if key == "dur" else "FFEC", name, ", ".join("%s %.3f" % (l, v) for l, v in vals), vals[0][0]))
+        return vals[0][1]
+
+    def need_runtime(name):
+        r = runtime_of(name)
+        if r is None:
+            alerts.append("Playlist Data: no run length for %s (the CPL could not be read)" % name)
+        return r
+
+    # ---- FEATURES ----
+    feature_titles = []
+    for name in sorted(inst):
+        m = _PD_FEATURE_RE.match(name)
+        if not m:
+            continue
+        parts = name.split("_")
+        tok = next((x for x in parts[2:] if _FMT.match(x)), None)
+        fm = _FMT.match(tok) if tok else None
+        if fm is None or (fm.group(1) == "F" and fm.group(2) not in (None, "200")):
+            alerts.append("Playlist Data: cannot tell the framing of feature %s, row not written" % name)
+            continue
+        fmt = "SCOPE" if fm.group(1) == "S" else ("F-200" if fm.group(2) == "200" else "FLAT")
+        slug = re.sub(r"-w[A-Za-z]+$", "", m.group("slug"))
+        f = lookup(slug, S.get("slug_titles", {}).get(slug.upper()) or guess_title(slug))
+        rating = next((_PD_RATING_TOKENS[x[3:]] for x in parts if re.match(r"^US-(G|PG|PG13|R)$", x)), "")
+        if f.get("ok"):
+            title, release = f["title"], f.get("release") or ""
+            rating = rating or _pd_rating(f.get("rating"))
+        else:
+            title, release = guess_title(slug), ""
+            alerts.append("Playlist Data: feature %s has no TMDB match, so the title is a guess and there is no release date" % name)
+        if not rating:
+            alerts.append("Playlist Data: feature %s has no rating (not in the name and TMDB has none)" % name)
+        ffec = runtime_of(name, "ffec")
+        if ffec is None:
+            alerts.append("Playlist Data: feature %s has no FFEC marker" % name)
+        feature_titles.append(title)
+        rows.append(_pd_row("FEATURE", fmt, title, "", rating, release, cpl=name, runtime=need_runtime(name), ffec=ffec))
+
+    # ---- TRAILERS (whatever the trailer logic keeps installed) ----
+    kept = plan.get("kept", {})
+    for name, p in sorted(plan["managed"].items()):
+        if name in plan["deletes"]:
+            continue
+        f = plan["film_of"](p)
+        fmt = {"F": "FLAT", "S": "SCOPE"}.get(p["fmt"])
+        if not f["ok"] or not fmt:
+            continue
+        rows.append(_pd_row("TRAILER", fmt, f["title"], version_str(name), _pd_rating(f["rating"]), f.get("release") or "",
+                            cpl=name, runtime=need_runtime(name),
+                            notes="held back from delete, in a running or scheduled playlist" if name in kept else ""))
+
+    # ---- everything that is an ad ----
+    flights, gpg = printout["coke"], printout["gpg_titles"]
+    for name in sorted(inst):
+        d = inst[name]
+        if _PD_FEATURE_RE.match(name):
+            continue
+        ms = _PD_SV_RE.match(name)
+        if ms:
+            try:
+                monday = datetime.strptime(ms.group("ymd"), "%Y%m%d").date()
+            except ValueError:
+                alerts.append("Playlist Data: cannot read the date in %s, row not written" % name)
+                continue
+            if monday.weekday() != 0:
+                alerts.append("Playlist Data: %s is dated %s which is not a Monday, check the name" % (name, monday.isoformat()))
+            only, note = "", ""
+            if ms.group("title"):
+                only = next((ft for ft in feature_titles if _same_title(ft, ms.group("title"))), ms.group("title").strip())
+                if not any(_same_title(ft, only) for ft in feature_titles):
+                    note = "that feature is not on the servers yet"
+            rows.append(_pd_row("SV_EARLY" if ms.group("pos").lower() == "early" else "SV_LATE", "SCOPE", "",
+                                "", _PD_RATING_TOKENS[ms.group("rating").upper()], "", monday.isoformat(),
+                                (monday + timedelta(days=6)).isoformat(), name, need_runtime(name), only=only, notes=note))
+            continue
+        mk = _PD_COKE_RE.match(name)
+        if mk:
+            fl, kind = int(mk.group("flight")), mk.group("kind").upper()
+            fmt = "SCOPE" if mk.group("fmt").upper() == "S" else "FLAT"
+            if fl not in flights:
+                if printout_ok:
+                    alerts.append("Playlist Data: Coke flight %d (%s) has no dates on the Printout, row not written" % (fl, name))
+                continue
+            start, end = flights[fl]
+            if kind == "GEN":
+                rows.append(_pd_row("COKE", fmt, "", "", "ALL", "", start, end, name, need_runtime(name)))
+            elif not gpg:
+                alerts.append("Playlist Data: Coke GPG flight %d is on the servers but the Printout has no GPG TITLES line, so it is not written" % fl)
+            else:
+                rt = need_runtime(name)
+                for title in gpg:
+                    rows.append(_pd_row("COKE", fmt, "", "", "G,PG", "", start, end, name, rt, only=title, notes="GPG flight %d" % fl))
+            continue
+        mc = _PD_CHEVY_RE.match(name)
+        if mc:
+            w = _window_for_num(wins, mc.group("num"))
+            if not w:
+                if printout_ok:
+                    alerts.append("Playlist Data: Chevy %s has no dates (not in a campaign email or the Printout), row not written" % name)
+                continue
+            rows.append(_pd_row("CHEVY", "SCOPE" if mc.group("fmt").lower() == "scope" else "FLAT", "", "", "ALL", "",
+                                w["start"], w["end"], name, need_runtime(name)))
+            continue
+        mp = _PD_PRESHOW_RE.match(name)
+        if mp:
+            rows.append(_pd_row("PRESHOW", "SCOPE" if mp.group("fmt").lower() == "scope" else "FLAT", "", "", "ALL", "",
+                                cpl=name, runtime=need_runtime(name)))
+            continue
+        mr = _PD_CARD_RE.match(name)
+        if mr:
+            rows.append(_pd_row("RATING_CARD", "SCOPE" if mr.group("fmt").upper() == "S" else "FLAT", "", "",
+                                _pd_rating(mr.group("rating")), "", cpl=name, runtime=need_runtime(name)))
+            continue
+        if (d.get("kind") or "").lower() == "advertisement":
+            fmt = "SCOPE" if re.search(r"scope", name, re.I) else ("FLAT" if re.search(r"flat", name, re.I) else "")
+            w, note = _window_for_marquee(S, name, d, wins)
+            if not fmt:
+                alerts.append("Playlist Data: cannot tell flat from scope for the ad %s, row not written" % name)
+            elif not w:
+                if printout_ok:
+                    alerts.append("Playlist Data: no campaign dates found for the marquee ad %s, row not written" % name)
+            else:
+                rl = _ratings_list(w["ratings"])
+                rows.append(_pd_row("MARQUEE", fmt, "", "", ",".join(rl) if rl else "ALL", "", w["start"], w["end"], name,
+                                    need_runtime(name), notes=note, exc=", ".join(w["exclude"])))
+
+    # ---- two ads active at once ----
+    ads = [r for r in rows if r["role"] not in ("FEATURE", "TRAILER")]
+    groups = {}
+    for r in ads:
+        groups.setdefault((r["role"], r["format"], _norm_title(r["only_for_title"])), []).append(r)
+    for (role, fmt, _), lst in sorted(groups.items()):
+        for i, a in enumerate(lst):
+            for b in lst[i + 1:]:
+                if a["cpl_name"] == b["cpl_name"]:
+                    continue
+                ra = set(PD_RATINGS if a["rating"] == "ALL" else a["rating"].split(","))
+                rb = set(PD_RATINGS if b["rating"] == "ALL" else b["rating"].split(","))
+                lo = max(a["start_date"] or "0000", b["start_date"] or "0000")
+                hi = min(a["end_date"] or "9999", b["end_date"] or "9999")
+                if ra & rb and lo <= hi:
+                    alerts.append("Playlist Data: two %s %s ads are active at the same time (%s and %s, both on %s)" % (
+                        role, fmt, a["cpl_name"], b["cpl_name"], lo if lo != "0000" else "every day"))
+
+    # ---- next week's SV pair ----
+    nxt = t + timedelta(days=(7 - t.weekday()) % 7 or 7)
+    if (nxt - t).days <= SV_PAIR_ALERT_DAYS:
+        have = {(r["role"], r["rating"]) for r in rows if r["role"] in ("SV_EARLY", "SV_LATE") and not r["only_for_title"]
+                and r["start_date"] == nxt.isoformat()}
+        miss = ["%s %s" % ("early" if role == "SV_EARLY" else "late", rt) for rt in PD_RATINGS for role in ("SV_EARLY", "SV_LATE")
+                if (role, rt) not in have]
+        if miss:
+            alerts.append("Playlist Data: SV ads for the week starting %s are not on the servers yet: %s" % (
+                "%d/%d" % (nxt.month, nxt.day), ", ".join(miss)))
+
+    rows.sort(key=lambda r: (PD_ROLE_ORDER.index(r["role"]), r["format"], r["start_date"], r["title"].lower(),
+                             r["only_for_title"].lower(), r["cpl_name"]))
+    return [[r[h] for h in PD_HEADER] for r in rows], list(dict.fromkeys(alerts))
+
+
+def read_printout(S):
+    """(lines of the Printout block, True) or (the last copy we saw, False) when the sheet cannot be read."""
+    try:
+        lines = sheet_call("printout")["lines"]
+        S["printout_cache"] = lines
+        return lines, True
+    except Exception as e:
+        log("Could not read the Printout block (%s). Using the last copy." % e)
+        return S.get("printout_cache", []), False
+
+
+def write_preview(rows):
+    """--dry-run only: the tab as a CSV next to the script so it can be opened and checked by eye."""
+    import csv
+    path = os.path.join(DATA, "playlist_data_preview.csv")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(PD_HEADER)
+        w.writerows(rows)
+    return path
+
+
+# ===================================================================================================
 #  SHEET PAYLOAD
 # ===================================================================================================
-def build_payload(S, plan, specials, inst_by_host, warnings_all):
+def build_payload(S, plan, specials, inst_by_host, warnings_all, pd_rows=None):
     t = today()
     labels = [l for l, _ in FTP_PROJECTORS]
     film_of = plan["film_of"]
@@ -1919,7 +2298,10 @@ def build_payload(S, plan, specials, inst_by_host, warnings_all):
         ["Warnings", "; ".join(warnings_all) or "none"],
     ]
     stat = {"name": "Status", "mode": "replace", "headers": ["Item", "Value"], "rows": stat_rows}
-    return {"tabs": [cd, av, dl, dele, nr, ai, sp, stat],
+    tabs = [cd, av, dl, dele, nr, ai, sp, stat]
+    if pd_rows is not None:
+        tabs.append({"name": PLAYLIST_DATA_TAB, "mode": "replace", "plain": True, "headers": PD_HEADER, "rows": pd_rows})
+    return {"tabs": tabs,
             "specials": [{k: s[k] for k in ("key", "label", "dates", "position", "ratings", "match", "active")} for s in specials]}
 
 
@@ -2054,7 +2436,7 @@ def healthcheck(S, plan, majors, dry=False):
 def compose_alerts(S, plan, specials, problems):
     """Builds {key: line} for everything that currently deserves attention, grouped by section."""
     t = today()
-    sec = {"dl": {}, "del": {}, "rv": {}, "sp": {}, "pr": {}}
+    sec = {"dl": {}, "del": {}, "rv": {}, "sp": {}, "pd": {}, "pr": {}}
     seen = set()
     for d in plan["downloads"]:
         k = (d["film"], d["ver"])
@@ -2088,6 +2470,8 @@ def compose_alerts(S, plan, specials, problems):
         if end and 0 <= (end - t).days <= 1:
             sec["sp"]["spend:" + s["key"]] = "Special ad ENDING %s: %s - pull it after the last show on %s" % (
                 "today" if end == t else "tomorrow", s["label"], _md(s["end"]))
+    for a in plan.get("pd_alerts", []):
+        sec["pd"]["pd:" + a] = a
     for i, pr in enumerate(problems):
         sec["pr"]["pr:" + pr] = pr
     return sec
@@ -2122,7 +2506,7 @@ def daily_digest(S, plan, specials, majors, dry=False):
     if waiting_ads:
         lines.append("**Ads downloaded but not on the projectors yet**")
         lines += ["- " + w for w in waiting_ads[:12]]
-    for key in ("dl", "del", "rv", "sp", "pr"):
+    for key in ("dl", "del", "rv", "sp", "pd", "pr"):
         items = sorted(sec[key].values())
         if items:
             lines.append("**%s**" % SECTION_TITLES[key])
@@ -2154,7 +2538,7 @@ def run_log_line(S, plan, majors, minors, started):
 
 
 SECTION_TITLES = {"dl": "Trailers to DOWNLOAD", "del": "Trailers to DELETE", "rv": "Need a TMDB match (Slug Rules tab)",
-                  "sp": "Special ads", "pr": "Heads up"}
+                  "sp": "Special ads", "pd": "Playlist Data tab", "pr": "Heads up"}
 
 
 def _alerted(S):
@@ -2210,7 +2594,7 @@ def send_alerts(S, plan, specials, problems, dry=False):
             _remember(S, current)
         return
     lines = []
-    for key in ("dl", "del", "rv", "sp", "pr"):
+    for key in ("dl", "del", "rv", "sp", "pd", "pr"):
         new = [(k, v) for k, v in sec[key].items() if k not in already]
         if new:
             lines.append("**%s**" % SECTION_TITLES[key])
@@ -2313,7 +2697,24 @@ def run_cycle(dry=False):
             log("Keep rule: %d trailer(s) held back from the delete list (in a playlist)" % len(plan["kept"]))
         specials = special_rows(S)
         warnings_all = list(plan["warnings"]) + problems + ["%s data is from the last good scan" % l for l in stale]
-        payload = build_payload(S, plan, specials, inst_by_host, warnings_all)
+        pd_rows = None
+        plan["pd_alerts"] = []
+        if PLAYLIST_DATA_ENABLED and SHEET_URL and SHEET_TOKEN:
+            try:
+                lines, printout_ok = read_printout(S)
+                if not printout_ok and not lines:
+                    problems.append("could not read the Printout block (paste the newest TrailerManager.gs and redeploy), Coke and Chevy dates are missing")
+                pd_rows, plan["pd_alerts"] = playlist_data(S, plan, parse_printout(lines, today()),
+                                                           lambda slug, hint: resolve_film(S, rules, slug, hint),
+                                                           printout_ok=printout_ok or bool(lines))
+                log("Playlist Data: %d rows, %d alert(s)" % (len(pd_rows), len(plan["pd_alerts"])))
+                if dry:
+                    log("(dry run: Playlist Data preview written to %s)" % write_preview(pd_rows))
+            except Exception as e:
+                # a bug here must never stop the trailer work, the old tab simply stays as it was
+                log("Playlist Data failed: %s\n%s" % (e, traceback.format_exc()))
+                pd_rows, plan["pd_alerts"] = None, ["Playlist Data: the tab could not be built this run (%s)" % e]
+        payload = build_payload(S, plan, specials, inst_by_host, warnings_all, pd_rows)
         h = payload_hash(payload)
         log("Plan: download %d (+%d waiting)  delete %d  review %d  auto-ignored %d  specials %d" % (
             len(plan["downloads"]) // 2, len(plan["waiting"]), len(plan["deletes"]), len(plan["review"]),
@@ -2433,6 +2834,14 @@ def run_check():
         line("Sheet endpoint", True, r.get("message", ""))
     except Exception as e:
         line("Sheet endpoint", False, str(e))
+    if PLAYLIST_DATA_ENABLED:
+        try:
+            pr = parse_printout(sheet_call("printout")["lines"], today())
+            line("Printout block", True, "Coke flights %s, %d special ad row(s), GPG titles: %s" % (
+                ", ".join(str(k) for k in sorted(pr["coke"])) or "none found", len(pr["specials"]),
+                ", ".join(pr["gpg_titles"]) or "none"))
+        except Exception as e:
+            line("Printout block", False, "%s  (paste the newest TrailerManager.gs into the sheet and redeploy)" % e)
     d = tmdb_get("configuration")
     line("TMDB", bool(d), "" if d else "no answer (token wrong or no internet)")
     readers = [n for n, f in (("pdftotext", lambda: shutil.which("pdftotext")),
