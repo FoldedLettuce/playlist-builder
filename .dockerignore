@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+db
+.env
+service-account.json
+test
+tools
+*.md
+!ROADMAP.md
+docker-compose.yml

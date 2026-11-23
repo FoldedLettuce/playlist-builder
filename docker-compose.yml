@@ -1,0 +1,18 @@
+# Deploy on vm1-public-apps:  ~/stacks/playlist-builder/docker-compose.yml
+# Needs next to it:  .env (copy .env.example)  and  service-account.json (Google service account key)
+services:
+  playlist-builder:
+    image: ghcr.io/YOUR_GITHUB_USER/playlist-builder:latest   # <- put your GitHub username (lowercase)
+    container_name: playlist-builder
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3040:3000"   # point the Pangolin resource at <vm1 ip>:3040
+    volumes:
+      - ./service-account.json:/app/service-account.json:ro
+      - pb-db:/app/db   # permanent plan history. Back this up (see README)
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+volumes:
+  pb-db:
