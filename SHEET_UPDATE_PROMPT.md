@@ -59,3 +59,6 @@ The app has built-in values for the two black clips (Black MOS 1min = 60s, Black
 - Sample rows I expect (runtimes will be real): a FEATURE row for Hexed (`FLAT`, `PG`), an SV_EARLY row `Fb-SV early-PG13 20261123` with start 2026-11-23 / end 2026-11-29, two CHEVY rows for `.146/.147` ending 2026-11-25 and two for `.477/.478` starting 2026-11-26.
 - Re-running with no changes leaves the tab unchanged.
 - The Google Sheet stays shared with the app's service account (I'll give you its email if you need to confirm access).
+
+## Special ads: where they come from (changed 2026-11-23)
+Do not search for the Ceilio emails and do not download from them anymore. Always take special ads from the information emails and the Dropbox links in them. Liam may need to upload an email himself, so support a manual drop for that. Remove the Ceilio code path when this script is next updated.
