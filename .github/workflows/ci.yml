@@ -21,6 +21,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: trailer script tests
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
 
   publish:
     # tests must pass, and only pushes to main publish an image (Watchtower picks :latest up)

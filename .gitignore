@@ -5,3 +5,16 @@ service-account.json
 *.log
 *.zip
 .DS_Store
+
+# trailer script runtime files (live next to the script on the theatre PC)
+scripts/trailer_state.json*
+scripts/trailer_automation.log*
+scripts/trailer_automation.lock
+scripts/last_crash.json
+scripts/installed_dump.csv
+scripts/bulletins/
+scripts/launcher.log*
+scripts/launcher_bad.txt
+scripts/*.prev
+scripts/*.new
+scripts/*.bad

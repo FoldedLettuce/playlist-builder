@@ -15,6 +15,7 @@ Stack: Node 22 (built-in `node:sqlite`, so Node must be 22.13 or newer), Express
     npm install
     npm start        # http://localhost:3000 on SAMPLE data (placeholder run lengths, saving is blocked)
     npm test         # engine + server tests, must be green before any commit
+    python3 -m unittest discover -s scripts -p "test_*.py"   # trailer script tests, CI runs these too
 
 Real data needs `DATA_SOURCE=sheet`, `SHEET_ID`, and a `service-account.json`. See README.
 
@@ -30,7 +31,7 @@ Real data needs `DATA_SOURCE=sheet`, `SHEET_ID`, and a `service-account.json`. S
 | `tools/make_sample.py` | Regenerates the sample from the real `Current_Trailers.xlsx` |
 | `test/` | `engine.test.js` (rules, with a small hand-checkable synthetic dataset) and `server.test.js` (spawns the real server) |
 | `SHEET_UPDATE_PROMPT.md` | Spec and prompt for the session that owns `trailer_automation.py` and the sheet |
-| `scripts/` | (planned) `trailer_automation.py`, its self-updating launcher, and the Google Apps Script. No secrets in here |
+| `scripts/` | `trailer_automation.py` (runs on the theatre PC), `launcher.py` (Task Scheduler runs this, it self-updates the script from `main`), `make_env.py`, `TrailerManager.gs` (Apps Script, pasted into the sheet by hand), Python tests. NEVER put secrets in here, they live in `.env` on the PC. Anything merged to `main` that changes `trailer_automation.py` reaches the theatre PC within 15 minutes |
 | `ROADMAP.md` | Roadmap. The admin page shows this file |
 
 ## Data contract
@@ -103,6 +104,6 @@ The compose file, `.env.example`, and README have the setup steps. History lives
 
 ## Never
 
-- Never commit `.env`, `service-account.json`, or anything in `db/`.
+- Never commit `.env`, `service-account.json`, or anything in `db/`. The same goes for any token, password, webhook or email address inside `scripts/`.
 - Never push straight to main with failing tests. A merge to main ships to the theatre within a day.
 - Never make the history mutable, never save sample data, never expose Google credentials to the browser.

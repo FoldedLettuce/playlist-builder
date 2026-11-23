@@ -1,15 +1,16 @@
 # Roadmap
 
 ## Done
+- Trailer script and Apps Script are in the repo under `scripts/`, with a self-updating launcher
+- Trailer keep rule (script asks the app which trailers are in a running or scheduled playlist, those are never put on the delete list)
 - Playlist & schedule builder (exact time codes, SV week splits, theatre swaps, trailer picking, timing verification)
 - Permanent history of every saved plan (can't be edited or deleted)
 - Hidden admin page with its own password
 
 ## Up next (small, soon)
-- Put the trailer script and the Google Apps Script into this repo under `scripts/` so they are versioned. Secrets and per-machine config (`config.json`, service account keys, tokens) stay out of git.
-- Trailer keep rule in the script: never put a trailer on the delete list while a running or scheduled playlist uses it (superseded versions like Ice Age TLR-1 stay until their last playing day). Needs the app to say which trailers are in use. Saved plans already record that, so expose it over a token-protected endpoint.
+- Script writes the `Playlist Data` tab (features, trailers, SV ads, Coke, Chevy, marquee, preshow, rating cards with run lengths and FFEC). Run lengths are already read from the CPLs, the role mapping needs `--dump-installed` output.
 - Special ads in the trailer script: stop looking for the Ceilio emails and stop downloading from them. Always download special ads from the information emails and the Dropbox links they contain. Sometimes Liam has to upload an email by hand for the script to find, so support that (for example a watched folder or a manual upload step). Remove the Ceilio search and download code when the script is updated.
-- Self-updating Python script. The Task Scheduler job (every 15 min) runs a tiny launcher that fetches the latest script from the repo, checks it, and then runs it, so edits never need a trip on site. Falls back to the last good copy if GitHub can't be reached.
+- Switch special ads from the Ceilio emails to the information emails and Dropbox links (needs a sample information email).
 
 ## Next (the big one): trailer management moves into this app
 Goal: this app becomes the source of truth for trailers, ads, features and run lengths. The spreadsheet stops being the database.

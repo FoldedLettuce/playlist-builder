@@ -152,3 +152,40 @@ test('/healthz answers without a login (for Docker and Uptime Kuma)', async () =
     s.kill()
   }
 })
+
+test('in-use trailers: off without a token, token protected, only running or scheduled playlists, even with staff login on', async () => {
+  const off = boot(3610, {})
+  try {
+    await wait(3610)
+    assert.equal((await fetch('http://localhost:3610/api/in-use')).status, 404)
+  } finally {
+    off.kill()
+  }
+  const s = boot(3611, { ALLOW_SAMPLE_SAVE: '1', API_TOKEN: 'script-token-123', APP_USER: 'u', APP_PASS: 'p' })
+  const B = 'http://localhost:3611'
+  const staff = { Authorization: 'Basic ' + Buffer.from('u:p').toString('base64') }
+  try {
+    await wait3611()
+    assert.equal((await fetch(B + '/api/in-use')).status, 401)
+    assert.equal((await fetch(B + '/api/in-use', { headers: { Authorization: 'Bearer nope' } })).status, 401)
+    assert.equal((await post(B + '/api/plans', makePayload(), staff)).status, 200)
+    const get = async (today) => (await fetch(B + '/api/in-use?today=' + today, { headers: { Authorization: 'Bearer script-token-123' } })).json()
+    const live = await get('2026-11-30')
+    assert.ok(live.trailers.length >= 4, 'running playlist protects its trailers')
+    assert.ok(live.trailers.every((t) => t.cpl && t.lastDay >= '2026-11-30' && t.playlists.length))
+    assert.equal((await get('2026-12-02')).trailers.length, 0, 'finished playlists protect nothing')
+  } finally {
+    s.kill()
+  }
+  async function wait3611() {
+    for (let i = 0; i < 50; i++) {
+      try {
+        await fetch(B + '/healthz')
+        return
+      } catch (e) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+    }
+    throw new Error('server did not start')
+  }
+})

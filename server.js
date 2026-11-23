@@ -39,6 +39,9 @@ const CONFIG = {
   adminPassword: process.env.ADMIN_PASSWORD || '',
   adminSessionHours: 12,
 
+  // Token for the trailer script (Authorization: Bearer <token>). It can only read GET /api/in-use. No token = that route is off.
+  apiToken: process.env.API_TOKEN || '',
+
   // Saving SAMPLE data would put junk in a history that can never be deleted, so it's blocked unless you flip this (tests only).
   allowSampleSave: process.env.ALLOW_SAMPLE_SAVE === '1',
 
@@ -57,6 +60,7 @@ app.get('/healthz', (req, res) => res.type('text').send('ok'))
 /* ------------------------------------------------------------ staff login */
 if (CONFIG.basicAuthUser && CONFIG.basicAuthPass) {
   app.use((req, res, next) => {
+    if (req.path === '/api/in-use') return next() // has its own token check
     const h = req.headers.authorization || ''
     const [scheme, enc] = h.split(' ')
     if (scheme === 'Basic' && enc) {
@@ -208,6 +212,37 @@ app.post('/api/plans', express.json({ limit: '4mb' }), (req, res) => {
     console.error(e)
     res.status(500).json({ error: 'Could not save. Check the server log.' })
   }
+})
+
+/* ------------------------------------------------- trailers in use (script) */
+// Which trailers are in a saved playlist that is still running or scheduled. The trailer script reads this so it never
+// puts those on its delete list. Read-only, token protected, and it sits before the staff login so the script can reach it.
+app.get('/api/in-use', (req, res) => {
+  if (!CONFIG.apiToken) return res.status(404).end()
+  const h = req.headers.authorization || ''
+  if (!h.startsWith('Bearer ') || !safeEq(h.slice(7), CONFIG.apiToken)) return res.status(401).json({ error: 'bad token' })
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.today || '')) ? String(req.query.today) : new Date().toISOString().slice(0, 10)
+  const found = new Map()
+  const rows = db.prepare("SELECT id, plan_json FROM plans WHERE saved_at >= date(?, '-120 days') ORDER BY id").all(today)
+  for (const r of rows) {
+    let plan
+    try {
+      plan = JSON.parse(r.plan_json)
+    } catch (e) {
+      continue
+    }
+    for (const pl of plan.playlists || []) {
+      if (!pl.end || pl.end < today) continue
+      for (const it of pl.items || []) {
+        if (it.kind !== 'trailer' || !it.cpl) continue
+        const t = found.get(it.cpl) || { cpl: it.cpl, label: it.label, lastDay: '', playlists: [] }
+        if (pl.end > t.lastDay) t.lastDay = pl.end
+        if (!t.playlists.includes(pl.name)) t.playlists.push(pl.name)
+        found.set(it.cpl, t)
+      }
+    }
+  }
+  res.json({ today, trailers: [...found.values()] })
 })
 
 /* ------------------------------------------------------------- admin page */
