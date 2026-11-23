@@ -5,6 +5,7 @@
   const CFG = PB.DEFAULT_CFG
   const LS_KEY = 'pb-state-v1'
 
+  let idSeq = Date.now()
   let ctx = null
   let meta = null
   let state = loadState()
@@ -26,7 +27,6 @@
       localStorage.setItem(LS_KEY, JSON.stringify(state))
     } catch (e) {}
   }
-  let idSeq = Date.now()
   function newFilm() {
     return { id: 'f' + idSeq++, featureKey: '', start: '', end: '', datesTouched: false, slots: [], ratingOverride: '', trailerCount: 0, exclude: [] }
   }
