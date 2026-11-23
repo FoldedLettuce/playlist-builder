@@ -18,3 +18,5 @@ scripts/launcher_bad.txt
 scripts/*.prev
 scripts/*.new
 scripts/*.bad
+__pycache__/
+*.pyc
