@@ -822,9 +822,12 @@
     if (n === 3) return [['S1', 'S3'], ['S2'], ['S4']]
     return [['S1'], ['S2'], ['S3'], ['S4']]
   }
+  // the next Friday strictly after today (new films open Fridays, runs go Friday through Thursday)
+  function nextFriday(today) {
+    return addDays(today, ((5 - dow(today) + 6) % 7) + 1)
+  }
   function defaultDates(feature, today) {
-    const nextMon = addDays(mondayOf(today), 7)
-    const start = feature.openDate && feature.openDate > today ? feature.openDate : nextMon
+    const start = feature.openDate && feature.openDate > today ? feature.openDate : nextFriday(today)
     return { start, end: addDays(start, 6) }
   }
 
@@ -832,6 +835,6 @@
     RATINGS, DEFAULT_CFG, DEFAULT_SLOTS,
     loadData, buildPlan, summarize, findAd, pickTrailers,
     defaultFilmSlots, defaultDates,
-    util: { parseDate, addDays, mondayOf, dow, dateRange, svWeek, parseDur, parseHM, fmtHMS, fmtTC, fmtClock, fmt12, fmtMin, fmtShortDate, normTitle, normRating, rank, daysBetween },
+    util: { nextFriday, parseDate, addDays, mondayOf, dow, dateRange, svWeek, parseDur, parseHM, fmtHMS, fmtTC, fmtClock, fmt12, fmtMin, fmtShortDate, normTitle, normRating, rank, daysBetween },
   }
 })

@@ -48,7 +48,9 @@ Roles: `FEATURE`, `TRAILER`, `SV_EARLY`, `SV_LATE`, `COKE`, `CHEVY`, `MARQUEE`, 
 - Playlist names are `SVW## Title`. SV weeks run Monday to Sunday. Week 1 is the first Monday of the calendar year, so Mon 2026-11-23 is SVW47. A playlist splits at every SV week boundary and whenever an ad changes mid-week (second period is `.5`, then `.6`). A film that opens after a mid-week switch is still the `.5` playlist.
 - Ads are picked by role, date window, rating, and format. A row with `only_for_title` beats the regular row (this is how a feature-specific SV late ad like the Godzilla one works). Two equally good matches raise an "ambiguous" warning.
 - Theatre assignment: default screens are #1 for 3:30 and 6:30, #2 for 4:00 and 7:00. If the turnaround before a preshow is under 15 minutes, try the swapped layout. If neither reaches 15, take the better one when it is at least 5 minutes and warn. Under 5 is an error that needs a manual call.
+- Default run is the upcoming Friday (strictly after today) through the following Thursday, unless the film has a later open date in the sheet. `defaultDates()` in the engine.
 - A film can run at most 7 days (new bookings are not known further out). A week can still have one film through Tuesday and a new one opening Wednesday.
+- Trailer cleanup rule (for the trailer script and the future trailer UI): never delete or replace a trailer that is in a playlist currently running or scheduled, even if it is old or superseded by a newer version. Retire it only after its last playing day. Reason: swapping mid-week means recalculating times and editing playlists for no benefit. A held-over film is handled by making a Fri-Sun playlist and editing the Mon-Thu one.
 - Missing runtimes or missing SV ads are loud errors. Never silently produce times from partial data.
 
 Do not change these numbers or rules without Liam saying so. If a rule changes, change the engine AND the test AND this section in the same commit.

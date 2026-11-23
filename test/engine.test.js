@@ -249,3 +249,16 @@ test('summarize() is plain JSON and round-trips', () => {
   assert.equal(back.schedule[0].startClock, '15:11:52')
   assert.equal(back.playlists[0].items.length, 14)
 })
+
+test('default run is the upcoming Friday through Thursday (7 days)', () => {
+  const f = { openDate: '' }
+  // Mon 2026-11-23 -> Fri 11/27 .. Thu 12/3
+  assert.deepStrictEqual(PB.defaultDates(f, '2026-11-23'), { start: '2026-11-27', end: '2026-12-03' })
+  // Sat and Sun look ahead to the following Friday
+  assert.strictEqual(PB.defaultDates(f, '2026-11-28').start, '2026-12-04')
+  assert.strictEqual(PB.defaultDates(f, '2026-11-29').start, '2026-12-04')
+  // on a Friday the current week is already open, so plan the next one
+  assert.strictEqual(PB.defaultDates(f, '2026-11-27').start, '2026-12-04')
+  // a film with a known future open date uses it
+  assert.strictEqual(PB.defaultDates({ openDate: '2026-12-11' }, '2026-11-23').start, '2026-12-11')
+})

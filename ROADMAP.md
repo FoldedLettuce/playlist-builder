@@ -7,6 +7,7 @@
 
 ## Up next (small, soon)
 - Put the trailer script and the Google Apps Script into this repo under `scripts/` so they are versioned. Secrets and per-machine config (`config.json`, service account keys, tokens) stay out of git.
+- Trailer keep rule in the script: never put a trailer on the delete list while a running or scheduled playlist uses it (superseded versions like Ice Age TLR-1 stay until their last playing day). Needs the app to say which trailers are in use. Saved plans already record that, so expose it over a token-protected endpoint.
 - Self-updating Python script. The Task Scheduler job (every 15 min) runs a tiny launcher that fetches the latest script from the repo, checks it, and then runs it, so edits never need a trip on site. Falls back to the last good copy if GitHub can't be reached.
 
 ## Next (the big one): trailer management moves into this app
