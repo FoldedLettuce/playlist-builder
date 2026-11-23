@@ -4,7 +4,7 @@ const PB = require('../public/engine.js')
 const sample = require('../data/sample-rows.json')
 const U = PB.util
 
-const row = (o) => Object.assign({ role: '', format: '', title: '', version: '', rating: '', release_date: '', start_date: '', end_date: '', cpl_name: '', runtime_sec: '', ffec_sec: '', only_for_title: '' }, o)
+const row = (o) => Object.assign({ role: '', format: '', title: '', version: '', rating: '', release_date: '', start_date: '', end_date: '', cpl_name: '', runtime_sec: '', ffec_sec: '', only_for_title: '', except_titles: '' }, o)
 
 /* A tiny synthetic dataset with numbers that are easy to check by hand */
 function synth() {
@@ -238,6 +238,35 @@ test('feature-specific SV late ad (Godzilla style) replaces the regular one for 
   assert.equal(lateOf('g'), 'SVL_GODZ')
   assert.equal(lateOf('m'), 'SVL_47')
   assert.ok(!plan.flags.some((f) => /More than one/.test(f.text)), 'a film-specific ad is not "ambiguous"')
+})
+
+test('except_titles skips an ad for that film only (Geico skips Josephine style)', () => {
+  const r = synth()
+  r.push(row({ role: 'MARQUEE', format: 'SCOPE', rating: 'ALL', start_date: '2026-11-23', end_date: '2026-11-29', cpl_name: 'GEICO_S', runtime_sec: 120, except_titles: 'Mid Movie' }))
+  r.push(row({ role: 'MARQUEE', format: 'FLAT', rating: 'ALL', start_date: '2026-11-23', end_date: '2026-11-29', cpl_name: 'GEICO_F', runtime_sec: 120, except_titles: 'Mid Movie' }))
+  const ctx = PB.loadData(r)
+  const plan = PB.buildPlan(ctx, {
+    films: [
+      { id: 'l', featureKey: 'LONG_FTR', start: '2026-11-23', end: '2026-11-25', slots: ['S1'], trailerCount: 5 },
+      { id: 'm', featureKey: 'MID_FTR', start: '2026-11-23', end: '2026-11-25', slots: ['S2'], trailerCount: 5 },
+    ],
+  })
+  const pl = (id) => plan.playlists.find((p) => p.film.id === id)
+  const mq = (id) => pl(id).items.filter((i) => i.kind === 'marquee')
+  assert.equal(mq('l').length, 1)
+  assert.equal(mq('l')[0].cpl, 'GEICO_S')
+  assert.equal(mq('m').length, 0, 'the excluded film gets no marquee ad')
+  assert.ok(!plan.flags.some((f) => /More than one/.test(f.text)))
+})
+
+test('everything before the feature is preshow, including the black clip and a 2 minute marquee ad', () => {
+  const r = synth()
+  r.push(row({ role: 'MARQUEE', format: 'SCOPE', rating: 'ALL', start_date: '2026-11-23', end_date: '2026-11-29', cpl_name: 'GEICO_S', runtime_sec: 120 }))
+  const ctx = PB.loadData(r)
+  const plan = PB.buildPlan(ctx, { films: [{ id: 'l', featureKey: 'LONG_FTR', start: '2026-11-23', end: '2026-11-25', slots: ['S1'], trailerCount: 5 }] })
+  // the plain synth() preshow is 1688s (60 black + 420 + 300 + 61 + 60 + 5*150 + 31 + 6), the 120s marquee ad adds to it
+  assert.equal(plan.schedule[0].preshowSec, 1808)
+  assert.ok(plan.schedule[0].verify.ok)
 })
 
 test('summarize() is plain JSON and round-trips', () => {

@@ -1,6 +1,7 @@
 # Roadmap
 
 ## Done
+- Script writes the `Playlist Data` tab (all nine roles with run lengths, FFEC, dates, `except_titles`) plus alerts, and the engine skips an ad for the titles in `except_titles`
 - Special ads now come from the Cinema Productions information email and its Dropbox links (Cielo HBR emails ignored, weekly SV ads still use Cielo). A hand-saved `.eml` in `email_drop` is read too
 - Trailer script and Apps Script are in the repo under `scripts/`, with a self-updating launcher
 - Trailer keep rule (script asks the app which trailers are in a running or scheduled playlist, those are never put on the delete list)
@@ -9,7 +10,8 @@
 - Hidden admin page with its own password
 
 ## Up next (small, soon)
-- Script writes the `Playlist Data` tab (features, trailers, SV ads, Coke, Chevy, marquee, preshow, rating cards with run lengths and FFEC). Run lengths are already read from the CPLs, the role mapping needs `--dump-installed` output.
+- Switch the app to `DATA_SOURCE=sheet` on vm1 and check a real week's plan against a hand built one
+- Watch the first Dropbox special ad download on the theatre PC
 
 ## Next (the big one): trailer management moves into this app
 Goal: this app becomes the source of truth for trailers, ads, features and run lengths. The spreadsheet stops being the database.

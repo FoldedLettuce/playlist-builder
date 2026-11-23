@@ -13,7 +13,7 @@ def est(name, lo=112, hi=162):
     return round(lo + (h % ((hi-lo)*10))/10, 3)
 rows = []
 def row(**k):
-    base = dict(role='',format='',title='',version='',rating='',release_date='',start_date='',end_date='',cpl_name='',runtime_sec='',ffec_sec='',only_for_title='',notes='SAMPLE runtime (placeholder)')
+    base = dict(role='',format='',title='',version='',rating='',release_date='',start_date='',end_date='',cpl_name='',runtime_sec='',ffec_sec='',only_for_title='',notes='SAMPLE runtime (placeholder)',except_titles='')
     base.update(k); rows.append(base)
 for r in range(2, cd.max_row+1):
     b=cd.cell(r,2).value; d=cd.cell(r,4).value
