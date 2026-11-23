@@ -62,3 +62,6 @@ The app has built-in values for the two black clips (Black MOS 1min = 60s, Black
 
 ## Special ads: where they come from (changed 2026-11-23)
 Do not search for the Ceilio emails and do not download from them anymore. Always take special ads from the information emails and the Dropbox links in them. Liam may need to upload an email himself, so support a manual drop for that. Remove the Ceilio code path when this script is next updated.
+
+Status 2026-11-23: done in `trailer_automation.py`. The Cielo "HBR Campaign" emails are ignored. Weekly SV ads still come from Cielo. The Cinema Productions information email now gives the brand, dates, spot length, who it skips (for example "ALL FEATURES EXCEPT JOSEPHINE") and the Flat and Scope Dropbox links. Dropbox links are forced to `dl=1`. To feed an email by hand, save it as a `.eml` in the `email_drop` folder next to the script. It is read on the next run and moved into `email_drop/done`. Per-title exclusions are not in the `Playlist Data` contract yet, so the app cannot skip a film for a marquee ad until that is added.
+

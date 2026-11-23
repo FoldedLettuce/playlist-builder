@@ -1,6 +1,7 @@
 # Roadmap
 
 ## Done
+- Special ads now come from the Cinema Productions information email and its Dropbox links (Cielo HBR emails ignored, weekly SV ads still use Cielo). A hand-saved `.eml` in `email_drop` is read too
 - Trailer script and Apps Script are in the repo under `scripts/`, with a self-updating launcher
 - Trailer keep rule (script asks the app which trailers are in a running or scheduled playlist, those are never put on the delete list)
 - Playlist & schedule builder (exact time codes, SV week splits, theatre swaps, trailer picking, timing verification)
@@ -9,8 +10,6 @@
 
 ## Up next (small, soon)
 - Script writes the `Playlist Data` tab (features, trailers, SV ads, Coke, Chevy, marquee, preshow, rating cards with run lengths and FFEC). Run lengths are already read from the CPLs, the role mapping needs `--dump-installed` output.
-- Special ads in the trailer script: stop looking for the Ceilio emails and stop downloading from them. Always download special ads from the information emails and the Dropbox links they contain. Sometimes Liam has to upload an email by hand for the script to find, so support that (for example a watched folder or a manual upload step). Remove the Ceilio search and download code when the script is updated.
-- Switch special ads from the Ceilio emails to the information emails and Dropbox links (needs a sample information email).
 
 ## Next (the big one): trailer management moves into this app
 Goal: this app becomes the source of truth for trailers, ads, features and run lengths. The spreadsheet stops being the database.

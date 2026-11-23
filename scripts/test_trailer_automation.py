@@ -77,5 +77,68 @@ class KeepRule(unittest.TestCase):
         self.assertEqual(len(p["deletes"]), 3)
 
 
+class SpecialAdEmail(unittest.TestCase):
+    TEXT = ("Hello,\n\nStarting THURSDAY, November 26th, GEICO will be taking over the MARQUEE\n"
+            "position and will run up to and including Sunday, December 27th\n\n"
+            "The spot is :120 seconds & is to run on ALL FEATURES EXCEPT JOSEPHINE\n\n"
+            "Geico Holiday Special Rev 120 Flat\nMAR.GEI.1126.532\nGeico Holiday Special Rev 120 Scope\nMAR.GEI.1126.533\n")
+    HTML = ('<p>Flat:</p><a href="https://www.dropbox.com/scl/fo/aaa/BBB?rlkey=k1&amp;st=s1&amp;dl=0" title="x">'
+            '<span>MAR.GEI.1126.532_geico26hol_flat</span></a><p>Scope:</p>'
+            '<a href="https://www.dropbox.com/scl/fo/ccc/DDD?rlkey=k2&amp;st=s2&amp;dl=0"><span>MAR.GEI.1126.533_geico26hol_scope</span></a>')
+    SUBJ = "Geico MARQUEE Campaign - Starting THURSDAY, 11/26"
+
+    def parse(self):
+        from datetime import date
+        return ta.parse_campaign(self.SUBJ, self.TEXT, date(2026, 11, 23), self.HTML)
+
+    def test_dates_brand_length_and_exclusion(self):
+        c = self.parse()
+        self.assertEqual((c["start"], c["end"]), ("2026-11-26", "2026-12-27"))
+        self.assertEqual(c["name"], "Geico")
+        self.assertEqual(c["code"], "GEI")
+        self.assertEqual(c["length"], 120)
+        self.assertEqual(c["exclude"], ["Josephine"])
+        self.assertEqual(c["ratings"], "All Ratings")
+        self.assertEqual(c["placement"], "Late Marquee")
+        self.assertEqual(c["ids"], ["MAR.GEI.1126.532", "MAR.GEI.1126.533"])
+
+    def test_dropbox_links_unescaped_and_forced_to_download(self):
+        c = self.parse()
+        self.assertIn("&st=s1&", c["flat_url"])
+        self.assertTrue(c["scope_url"].endswith("dl=0"))
+        d = ta.dropbox_direct(c["flat_url"])
+        self.assertTrue(d.endswith("dl=1"))
+        self.assertEqual(d.count("dl="), 1)
+        self.assertIn("rlkey=k1", d)
+
+    def test_year_rolls_over(self):
+        from datetime import date
+        c = ta.parse_campaign("X MARQUEE Campaign", "Starting Monday, December 28th, X will be taking over the MARQUEE "
+                              "and will run up to and including Sunday, January 10th MAR.XXX.1228.1", date(2026, 12, 20), "")
+        self.assertEqual((c["start"], c["end"]), ("2026-12-28", "2027-01-10"))
+
+    def test_apply_queues_two_downloads_and_one_special(self):
+        from datetime import date
+        S = ta.new_state()
+        ta.TODAY_OVERRIDE = date(2026, 11, 23)
+        try:
+            rep = []
+            ta.apply_campaign(S, self.parse(), self.SUBJ, date(2026, 11, 23), rep)
+            ta.apply_campaign(S, self.parse(), self.SUBJ, date(2026, 11, 23), rep)       # the same email twice
+            self.assertEqual(len(S["specials"]), 1)
+            self.assertEqual(len(S["ads"]), 2)
+            self.assertTrue(all(u.endswith("dl=1") and a["status"] == "pending" for u, a in S["ads"].items()))
+            row = ta.special_rows(S)[0]
+            self.assertEqual(row["dates"], "11/26 - 12/27")
+            self.assertIn("not Josephine", row["ratings"])
+        finally:
+            ta.TODAY_OVERRIDE = None
+
+    def test_cielo_hbr_emails_are_ignored_but_weekly_ones_are_not(self):
+        self.assertIsNone(ta.classify_message("a@cielocinema.com", "HBR Campaign Ready for Download"))
+        self.assertEqual(ta.classify_message("a@cielocinema.com", "Ready for Download: sv weekly"), "cielo_ad")
+        self.assertEqual(ta.classify_message("a@cinemaproductionsinc.com", "Geico MARQUEE Campaign"), "campaign")
+
+
 if __name__ == "__main__":
     unittest.main()

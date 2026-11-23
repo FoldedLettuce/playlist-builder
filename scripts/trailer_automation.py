@@ -6,12 +6,12 @@ What it does, every POLL_MINUTES (default 15):
   1. Reads the automation Gmail (read-only) for
        - Deluxe "Ready for INGESTION" e-delivery emails  -> what is AVAILABLE to ingest
        - the weekly TrailMix bulletin PDF (or a PDF you drop in BULLETIN_DIR) -> real titles + Deluxe's REMOVE list
-       - Cielo "HBR Campaign" emails -> special ads (Google etc.) for the Printout's Special Advertisements block
+       - Cinema Productions special ad information emails (brand, dates, Dropbox links) -> Printout's Special Advertisements block
   2. Scans both projectors over FTP (read-only) -> what is INSTALLED, with full untruncated names
   3. Applies your rules (English audio / 5.1 / CCAP preferred, release date, 28-day rule, newer version, remove list)
   4. Pushes the result to your Google Sheet (Available, Currently Downloaded, Download, Delete, Needs Review,
      Auto-Ignored, Special Ads, Status) and rebuilds the Printout
-  5. Downloads Cielo ad ZIPs (weekly ads + HBR campaigns) into ADS_TARGET_ROOT and tidies old ones
+  5. Downloads weekly ad ZIPs (Cielo) and special ad ZIPs (Dropbox links in the information email) into ADS_TARGET_ROOT and tidies old ones
   6. Discord: the MAIN webhook only gets things that need you and MAJOR errors. The LOG webhook (mute it) gets minor
      errors, finished ad downloads and a healthcheck. Uptime Kuma gets a heartbeat every cycle (down on a major problem).
 
@@ -102,8 +102,8 @@ KUMA_PUSH_URL = ""
 DATA_DIR = ""
 BULLETIN_DIR = ""                  # blank = DATA_DIR/bulletins . Drop a TrailMix PDF here and it gets read too.
 
-# --- Cielo ad downloads (this replaces the ad part of projector_automation.py) ---
-# Every Cielo "Ready for Download" email (weekly ads AND HBR campaigns) has a ZIP link. The script downloads it,
+# --- Ad downloads (this replaces the ad part of projector_automation.py) ---
+# Weekly ads: every Cielo "Ready for Download" email has a ZIP link. Special ads: the Dropbox links in the Cinema Productions information email. The script downloads it,
 # unzips it into ADS_TARGET_ROOT, and keeps only the newest Flat and Scope CPL in the folder.
 ADS_ENABLED = True
 ADS_TARGET_ROOT = r"C:\Users\theater\Documents\Content"
@@ -113,6 +113,7 @@ ADS_ARCHIVE_ROOT = r"C:\Users\theater\Documents\Content_Archive"   # expired ads
 ADS_ARCHIVE_DAYS = 90              # an archived ad folder is deleted (recycle bin) this many days after it was archived
 ADS_HBR_FALLBACK_DAYS = 30         # an HBR ad whose email had no end date is archived this many days after it arrived
 CIELO_SSL_VERIFY = True            # leave True. Only set False if --check still says the Cielo certificate fails (see notes)
+ADS_DROP_DIR = ""                  # blank = DATA_DIR/email_drop . Save a special ad information email here as a .eml file (or forward-save it) and the next run reads it exactly like an inbox email
 ADS_MAX_TRIES = 3                  # failed downloads are retried every cycle, then you get one Discord alert
 
 # --- Timing ---
@@ -137,11 +138,11 @@ EXCLUDE_SUBSTRINGS = ["imax", "4dx", "dbox", "d-box", "screenx", "regal", "cinem
 # ...and whole-word matches (split on _ and -)
 EXCLUDE_TOKENS = ["3d", "reald", "dvis", "plf", "ocap", "opncap"]
 
-# Special ads arrive as Cielo "HBR Campaign" emails (exact dates + placement) and, a few days earlier, as a
-# Cinema Productions "<Brand> MARQUEE Campaign" email (brand name + which ratings it runs on).
-# The script learns code -> brand name and the ratings from those emails by matching asset ids
-# (MAR.DOO.0226.099 -> DOO), so any brand works with no setup. This table is only a fallback for the case
-# where the HBR email shows up first (or the campaign email never came). Unknown codes show as the raw code.
+# Special ads come ONLY from the Cinema Productions "<Brand> MARQUEE Campaign" information email (the Cielo
+# "HBR Campaign" emails are ignored now). That one email has the brand, the dates, the spot length, which films
+# it skips and the Dropbox links for the Flat and Scope ZIPs. The script learns code -> brand name from it by
+# matching asset ids (MAR.GEI.1126.532 -> GEI), so any brand works with no setup. This table is only a fallback
+# for brands whose email did not say the name. Unknown codes show as the raw code.
 KNOWN_BRAND_NAMES = {"GOO": "Google", "AMA": "Amazon", "DOO": "DoorDash", "SAM": "Samsung"}
 SPECIAL_AD_DEFAULT_RATINGS = "G,PG,PG-13"      # used when no campaign email gave the ratings
 SPECIAL_AD_KEEP_DAYS_AFTER_END = 1             # leave the row on the Printout this many days after the end date
@@ -810,7 +811,7 @@ def classify_message(frm, subj):
     if "trailmix" in s and "ready for ingestion" not in s:
         return "bulletin?"
     if "cielocinema.com" in f and "ready for download" in s:
-        return "hbr" if "hbr campaign" in s else "cielo_ad"
+        return None if "hbr campaign" in s else "cielo_ad"       # HBR (special ad) emails are ignored, see KNOWN_BRAND_NAMES note
     if "cinemaproductionsinc.com" in f and "campaign" in s:
         return "campaign"
     return None
@@ -836,35 +837,130 @@ def _brand_name(raw):
     return raw.title() if raw.isupper() or raw.islower() else raw
 
 
-def parse_campaign(subj, text):
-    """Cinema Productions campaign email -> brand name, ids, ratings (dates are taken from the Cielo HBR email instead)."""
+MONTHS = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+
+
+def _month_day(mon, day, year):
+    mo = MONTHS.get((mon or "")[:3].lower())
+    if not mo:
+        return None
+    try:
+        return datetime(year, mo, int(day)).date()
+    except ValueError:
+        return None
+
+
+def parse_campaign(subj, text, received=None, html=""):
+    """Cinema Productions special ad information email -> everything the script needs, or None if it has no asset ids.
+    Keys: ids, code, name, ratings, exclude (list of film titles to skip), start, end (ISO or ''), length (seconds or 0),
+    placement, flat_url, scope_url."""
     ids = sorted(set(re.findall(r"MAR\.[A-Z0-9]+\.\d{3,4}\.\d+", text)))
     if not ids:
         return None
-    m = re.search(r"([A-Za-z][A-Za-z0-9&.' ]{1,30}?)\s+will be taking over", text) or \
-        re.search(r"^\s*(.+?)\s+(?:late[- ]?)?marquee\s+campaign", subj or "", re.I)
+    flat = " ".join((text or "").split())
+    m = re.search(r"([A-Za-z][A-Za-z0-9&.' ]{1,30}?)\s+will be taking over", flat) or \
+        re.search(r"^\s*(.+?)\s+(?:late[- ]?)?(?:marquee|trailer|chevy)\s+campaign", subj or "", re.I)
     name = _brand_name(m.group(1)) if m else ""
+    # who it runs on: "run on ALL FEATURES EXCEPT JOSEPHINE", "run on All G, PG, & PG-13 Titles"
     r = re.search(r"run\s+on\s+([^\n\r]+)", text, re.I)
-    return {"ids": ids, "code": ids[0].split(".")[1], "name": name, "ratings": norm_ratings(r.group(1)) if r else ""}
+    phrase = r.group(1).strip() if r else ""
+    exclude, ratings = [], ""
+    ex = re.search(r"\bexcept\s+(.+)$", phrase, re.I)
+    if ex:
+        exclude = [_brand_name(x) for x in re.split(r"\s*(?:,|&|\band\b)\s*", ex.group(1).strip(" .")) if x.strip()]
+        ratings = "All Ratings"
+    elif phrase:
+        ratings = norm_ratings(phrase)
+    year = (received or today()).year
+    start = end = None
+    ms = re.search(r"Starting\s+(?:[A-Za-z]+,?\s+)?([A-Za-z]+)\s+(\d{1,2})", flat, re.I)
+    me = re.search(r"(?:up to and including|through|thru|until|ending(?: on)?)\s+(?:[A-Za-z]+,?\s+)?([A-Za-z]+)\s+(\d{1,2})", flat, re.I)
+    if ms:
+        start = _month_day(ms.group(1), ms.group(2), year)
+    if me:
+        end = _month_day(me.group(1), me.group(2), year)
+    if start and end and end < start:
+        end = _month_day(me.group(1), me.group(2), year + 1)
+    ln = re.search(r"spot is\s*:?\s*(\d+)\s*(?:sec|s\b|:)?", flat, re.I)
+    placement = "Late Marquee" if re.search(r"marquee", (subj or "") + " " + flat, re.I) else \
+                ("Trailer" if re.search(r"trailer", subj or "", re.I) else "")
+    links = {"flat": "", "scope": ""}
+    for href, label in re.findall(r"<a\s[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", html or "", re.I | re.S):
+        href = href.replace("&amp;", "&")
+        if "dropbox.com" not in href.lower():
+            continue
+        lab = re.sub(r"<[^>]+>", "", label).lower()
+        kind = "flat" if "flat" in lab else ("scope" if "scope" in lab else "")
+        if kind and not links[kind]:
+            links[kind] = href
+    return {"ids": ids, "code": ids[0].split(".")[1], "name": name, "ratings": ratings, "exclude": exclude,
+            "start": start.isoformat() if start else "", "end": end.isoformat() if end else "",
+            "length": int(ln.group(1)) if ln else 0, "placement": placement,
+            "flat_url": links["flat"], "scope_url": links["scope"]}
 
 
-def parse_hbr(text):
-    ids = re.findall(r"MAR\.[A-Z0-9]+\.\d{3,4}\.\d+", text)
-    pl = re.search(r"Placement:\s*([A-Za-z\- ]+)", text)
-    st = re.search(r"Start Date:\s*(\d{4}-\d{2}-\d{2})", text)
-    en = re.search(r"End Date:\s*(\d{4}-\d{2}-\d{2})", text)
-    if not ids or not st or not en:
-        return None
-    ids = sorted(set(ids))
-    brand = ids[0].split(".")[1]
-    return {"ids": ids, "brand": brand, "placement": (pl.group(1).strip() if pl else ""),
-            "start": st.group(1), "end": en.group(1)}
+def dropbox_direct(url):
+    """A Dropbox share link (dl=0) -> the same link forced to download (dl=1). Works without an account."""
+    u = urllib.parse.urlparse(url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(u.query) if k != "dl"] + [("dl", "1")]
+    return urllib.parse.urlunparse(u._replace(query=urllib.parse.urlencode(q)))
+
+
+def apply_campaign(S, c, subj, received, report):
+    """One special ad information email: remember the brand, the dates, who it skips, and queue the Dropbox downloads."""
+    if c["name"] and S["brands"].get(c["code"]) != c["name"]:
+        S["brands"][c["code"]] = c["name"]
+        report.append("campaign email: %s = %s" % (c["code"], c["name"]))
+    if c["ratings"]:
+        for i in c["ids"]:
+            S["campaign_ratings"][i] = c["ratings"]
+    if not (c["start"] and c["end"]):
+        report.append("campaign email has no readable dates, check by hand: %s" % subj[:60])
+        return
+    key = "|".join(c["ids"]) + "|" + c["start"] + "|" + c["end"]
+    if key not in S["specials"]:
+        S["specials"][key] = {"ids": c["ids"], "brand": c["code"], "placement": c["placement"], "start": c["start"],
+                              "end": c["end"], "received": received.isoformat(), "alerts": [],
+                              "exclude": c["exclude"], "length": c["length"]}
+        report.append("special ad %s %s to %s%s" % (",".join(c["ids"]), c["start"], c["end"],
+                      (" (skips " + ", ".join(c["exclude"]) + ")") if c["exclude"] else ""))
+    if ADS_ENABLED and received >= today() - timedelta(days=ADS_LOOKBACK_DAYS):
+        for kind in ("flat", "scope"):
+            url = c[kind + "_url"]
+            if not url:
+                report.append("campaign email has no Dropbox %s link: %s" % (kind, subj[:60]))
+                continue
+            direct = dropbox_direct(url)
+            if direct not in S["ads"]:
+                S["ads"][direct] = {"subj": ("%s %s" % (subj, kind))[:90], "date": received.isoformat(), "status": "pending",
+                                    "tries": 0, "folder": "", "kind": "hbr", "end": c["end"], "cpls": []}
+
+
+def scan_email_drop(S, report):
+    """Any .eml in the drop folder is read like an inbox email, then moved into a 'done' subfolder."""
+    folder = ADS_DROP_DIR or os.path.join(DATA, "email_drop")
+    if not os.path.isdir(folder):
+        return
+    for fn in sorted(os.listdir(folder)):
+        full = os.path.join(folder, fn)
+        if not (os.path.isfile(full) and fn.lower().endswith(".eml")):
+            continue
+        try:
+            with open(full, "rb") as fh:
+                msg = email.message_from_bytes(fh.read(), policy=policy.default)
+            kind = classify_message(str(msg["from"]), str(msg["subject"])) or "campaign"
+            apply_message(S, msg, kind, report)
+            os.makedirs(os.path.join(folder, "done"), exist_ok=True)
+            shutil.move(full, os.path.join(folder, "done", fn))
+            report.append("dropped email read: %s" % fn)
+        except Exception as e:
+            report.append("ERROR reading dropped email %s: %s" % (fn, e))
 
 
 def apply_message(S, msg, kind, report):
     """Fold one downloaded message into state. report collects human-readable notes."""
     subj = str(msg["subject"] or "")
-    if kind in ("hbr", "cielo_ad"):
+    if kind == "cielo_ad":
         queue_ad_download(S, msg, subj)
     if kind == "drop":
         names = sorted(set(_NAME_RE.findall(_msg_text(msg))))
@@ -879,25 +975,18 @@ def apply_message(S, msg, kind, report):
     elif kind == "cielo_ad":
         pass                    # nothing but the download, which was queued above
     elif kind == "campaign":
-        c = parse_campaign(subj, _msg_text(msg))
+        raw = ""
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                try:
+                    raw += part.get_content()
+                except Exception:
+                    pass
+        c = parse_campaign(subj, _msg_text(msg), _msg_date(msg), raw)
         if c:
-            if c["name"] and S["brands"].get(c["code"]) != c["name"]:
-                S["brands"][c["code"]] = c["name"]
-                report.append("campaign email: %s = %s" % (c["code"], c["name"]))
-            if c["ratings"]:
-                for i in c["ids"]:
-                    S["campaign_ratings"][i] = c["ratings"]
-    elif kind == "hbr":
-        info = parse_hbr(_msg_text(msg))
-        if info:
-            key = "|".join(info["ids"]) + "|" + info["start"] + "|" + info["end"]
-            if key not in S["specials"]:
-                info["received"] = _msg_date(msg).isoformat()
-                info["alerts"] = []
-                S["specials"][key] = info
-                report.append("HBR campaign %s %s-%s" % (",".join(info["ids"]), info["start"], info["end"]))
+            apply_campaign(S, c, subj, _msg_date(msg), report)
         else:
-            report.append("HBR email could not be read: %s" % subj[:60])
+            report.append("campaign email has no asset ids: %s" % subj[:60])
     elif kind == "bulletin?":
         for part in msg.walk():
             fn = part.get_filename() or ""
@@ -946,6 +1035,7 @@ def imap_ingest(S):
                 report.append("ERROR on message %d: %s" % (uid, e))
             st["last_uid"] = max(st["last_uid"], uid)
         log("Gmail: %d new messages looked at" % len(uids))
+        scan_email_drop(S, report)
     finally:
         try:
             M.logout()
@@ -955,7 +1045,7 @@ def imap_ingest(S):
 
 
 # ===================================================================================================
-#  CIELO AD DOWNLOADS
+#  AD DOWNLOADS (weekly = Cielo, special = Dropbox)
 # ===================================================================================================
 CIELO_LINK_RE = re.compile(r"""https?://portal\.cielocinema\.com/[^\s'"<>]*download_zip_dcp/[^\s'"<>]+""", re.I)
 
@@ -979,10 +1069,8 @@ def queue_ad_download(S, msg, subj):
         return
     url = urls[0]
     if url not in S["ads"]:
-        hbr = "hbr campaign" in subj.lower()
-        info = parse_hbr(_msg_text(msg)) if hbr else None
         S["ads"][url] = {"subj": subj[:90], "date": d.isoformat(), "status": "pending", "tries": 0, "folder": "",
-                         "kind": "hbr" if hbr else "weekly", "end": info["end"] if info else "", "cpls": []}
+                         "kind": "weekly", "end": "", "cpls": []}
 
 
 def _find_cpl_dir(root):
@@ -1095,7 +1183,8 @@ def download_ad(url):
     import zipfile
     os.makedirs(ADS_TARGET_ROOT, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with _open_cielo(req) as r:
+    opener = _open_cielo if "cielocinema.com" in url.lower() else (lambda rq: urllib.request.urlopen(rq, timeout=300))
+    with opener(req) as r:
         fn = _ad_filename(r, url)
         unique = os.path.splitext(fn)[0]
         final = os.path.join(ADS_TARGET_ROOT, unique)
@@ -1177,7 +1266,7 @@ def archive_ad(path):
 
 def ads_housekeeping(S):
     """Once a day: expired ads are moved to the archive, and archive folders older than ADS_ARCHIVE_DAYS are deleted.
-       - HBR / special ads expire the day after their campaign end date (the date comes from the Cielo email)
+       - HBR / special ads expire the day after their campaign end date (the date comes from the information email)
        - weekly Chicago ads (sv_YYYYMMDD_..._chicago) expire ADS_WEEKLY_DELETE_DAYS after the date in the folder name
     Returns a list of text lines about what it did."""
     if S.get("ads_cleanup_day") == today().isoformat():
@@ -1718,7 +1807,7 @@ def protect_deletes(plan, in_use, err):
 
 
 # ===================================================================================================
-#  SPECIAL ADS (Cielo HBR campaigns -> Printout "Special Advertisements" block)
+#  SPECIAL ADS (information emails -> Printout "Special Advertisements" block)
 # ===================================================================================================
 def _md(iso):
     d = _d(iso)
@@ -1739,13 +1828,15 @@ def special_rows(S):
         known = S["brands"].get(code) or KNOWN_BRAND_NAMES.get(code)
         brand = KNOWN_BRAND_NAMES.get(code) or known or code
         ratings = next((S["campaign_ratings"][i] for i in c["ids"] if i in S["campaign_ratings"]), SPECIAL_AD_DEFAULT_RATINGS)
+        if c.get("exclude"):
+            ratings = "%s (not %s)" % (ratings, ", ".join(c["exclude"]))
         label = "%s ( %s)" % (brand, " & ".join("." + n for n in nums))
         active = bool(end and (t - end).days <= SPECIAL_AD_KEEP_DAYS_AFTER_END)
         out.append({"key": key, "label": label, "dates": "%s - %s" % (_md(c["start"]), _md(c["end"])),
                     "position": (c["placement"] or "").replace("-", " ").title(), "ratings": ratings,
                     "match": nums, "active": active, "start": c["start"], "end": c["end"],
                     "received": c.get("received", ""), "unknown_brand": not known,
-                    "assets": ", ".join(c["ids"])})
+                    "assets": ", ".join(c["ids"]), "exclude": c.get("exclude", []), "length": c.get("length", 0)})
     out.sort(key=lambda r: (r["start"], r["label"]))
     return out
 
