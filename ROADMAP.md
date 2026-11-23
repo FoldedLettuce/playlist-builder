@@ -5,6 +5,10 @@
 - Permanent history of every saved plan (can't be edited or deleted)
 - Hidden admin page with its own password
 
+## Up next (small, soon)
+- Put the trailer script and the Google Apps Script into this repo under `scripts/` so they are versioned. Secrets and per-machine config (`config.json`, service account keys, tokens) stay out of git.
+- Self-updating Python script. The Task Scheduler job (every 15 min) runs a tiny launcher that fetches the latest script from the repo, checks it, and then runs it, so edits never need a trip on site. Falls back to the last good copy if GitHub can't be reached.
+
 ## Next (the big one): trailer management moves into this app
 Goal: this app becomes the source of truth for trailers, ads, features and run lengths. The spreadsheet stops being the database.
 1. Move the trailer data (available, currently downloaded, download/delete lists, slug rules, special ads) into the app's database, with a UI in the admin page.

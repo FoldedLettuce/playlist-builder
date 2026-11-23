@@ -30,6 +30,7 @@ Real data needs `DATA_SOURCE=sheet`, `SHEET_ID`, and a `service-account.json`. S
 | `tools/make_sample.py` | Regenerates the sample from the real `Current_Trailers.xlsx` |
 | `test/` | `engine.test.js` (rules, with a small hand-checkable synthetic dataset) and `server.test.js` (spawns the real server) |
 | `SHEET_UPDATE_PROMPT.md` | Spec and prompt for the session that owns `trailer_automation.py` and the sheet |
+| `scripts/` | (planned) `trailer_automation.py`, its self-updating launcher, and the Google Apps Script. No secrets in here |
 | `ROADMAP.md` | Roadmap. The admin page shows this file |
 
 ## Data contract
